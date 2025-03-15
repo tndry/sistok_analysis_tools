@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_option_menu import option_menu
@@ -7,7 +8,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import os
 import gdown
-from openai import OpenAI
+from sklearn.linear_model import LinearRegression
 
 
 
@@ -18,29 +19,44 @@ st.set_page_config(
     page_icon="🐟",
     layout="wide"
 )
-# Inisialisasi OpenAI Client
-client = OpenAI(api_key=st.secrets['OPENAI_API_KEY'])
+# # Inisialisasi OpenAI Client
+# client = OpenAI(
+#     api_key=st.secrets.DEEPSEEK,
+#     base_url="https://api.deepseek.com"
+           
+#                 )
 
-
+# Data ASLIII
 # ID file Googel Drive
-file_id = '1eACQIHOn3oS96V8rHzN6VlMuKtNX5raz'
+# file_id = '1eACQIHOn3oS96V8rHzN6VlMuKtNX5raz'
+# drive_url = f'https://drive.google.com/uc?id={file_id}'
 
-# URL Google drive untuk diunduh
-drive_url = f'https://drive.google.com/uc?id={file_id}'
+
+# Data DEMOO
+# # ID file Googel Drive
+# file_id = '1wXxn-GJtVfEaZJTH-IPe4svur9uLbZIs' 
+# drive_url = f'https://drive.google.com/uc?id={file_id}'
+
+
 
 # Fungsi untuk memuat data dari database atau file CSV
 @st.cache_data
 def load_data():
     try:
         # Download file CSV
-        file_path = 'data_bersih.csv'  
-        gdown.download(drive_url, file_path, quiet=False)
+        # ASLI
+        # file_path = 'data_bersih.csv'  
+        #DEMO
+        file_path = 'data/data_bersih_demo.csv'
+        # gdown.download(drive_url, file_path, quiet=False)
         # Baca file CCSV
         df = pd.read_csv(file_path,  low_memory=False)
         # Konversi tanggal ke tipe datetime
         df['tanggal_berangkat'] = pd.to_datetime(df['tanggal_berangkat'], errors='coerce')
         df['tanggal_kedatangan'] = pd.to_datetime(df['tanggal_kedatangan'], errors='coerce')
         df['tahun'] = df['tanggal_kedatangan'].dt.year
+
+        
         return df
 
     except FileNotFoundError:
@@ -79,40 +95,103 @@ def filter_data(df, pelabuhan_kedatangan_id, nama_ikan_id, start_year, end_year,
 
 # Function to get OpenAI chat response
 
-def get_openai_response(query, filtered_data):
-    # create context about the current data
-
-    data_context = {
-        'total_tangkapan' : f"{float(filtered_data['berat'].sum()):,.2f} Kg",
-        'nilai_produksi' : f"{filtered_data['nilai_produksi'].sum():,.2f} IDR",
-        'periode': f'{filtered_data['tahun'].min()} to {filtered_data['tahun'].max()}',
-        'jenis_ikan_dominan': filtered_data.groupby('nama_ikan_id')['berat'].sum().nlargest(3).index.tolist(),
-        'alat_tangkap_dominan': filtered_data.groupby('jenis_api')['berat'].sum().nlargest(3).index.tolist(),
-    }
-    system_prompt = f"""You are an expert fishing data analyst assistant. Analyzie the fishing data dashboard and provide insights based on the following context:
-
-Current Dashboard Data:
-- Total Tangkapan: {data_context['total_tangkapan']}
-- Nilai Produksi: {data_context['nilai_produksi']}
-- Time Period: {data_context['periode']}
-- Top 3 Jenis Ikan: {', '.join(data_context['jenis_ikan_dominan'])}
-- Top 3 Alat Tangkap: {', '.join(data_context['alat_tangkap_dominan'])}
-
-Provide concise, data-driven answers in Bahasa Indonesia. Focus on trends, patterns, and insights from the data"""
+def analyze_fishing_data(query, filtered_data):
+    """
+    Fungsi untuk menganalisis data perikanan berdasarkan query pengguna
+    """
+    query = query.lower()
+    response = ""
+    
     try:
-        response=client.chat.completions.create(
-            model='gpt-3.5-turbo',
-            messages=[
-                {'role': 'system', 'content': system_prompt},
-                *[{'role': msg['role'], 'content': msg['content']} for msg in st.session_state.chat_history[-5::]],
-                {'role': 'user', 'content': query}
-            ],
-            temperature=0.7,
-            max_tokens=500
-        )
-        return response.choices[0].message.content
+        # Analisis total tangkapan
+        if 'total tangkapan' in query or 'berapa tangkapan' in query:
+            # Filter berdasarkan jenis ikan jika disebutkan
+            for fish in filtered_data['nama_ikan_id'].unique():
+                if fish.lower() in query:
+                    specific_data = filtered_data[filtered_data['nama_ikan_id'].str.lower() == fish.lower()]
+                    
+                    # Filter tahun jika disebutkan
+                    for year in filtered_data['tahun'].unique():
+                        if str(year) in query:
+                            year_data = specific_data[specific_data['tahun'] == year]
+                            total = year_data['berat'].sum()
+                            return f"Total tangkapan {fish} pada tahun {year} adalah {total:,.2f} Kg"
+                    
+                    # Jika tahun tidak disebutkan, tampilkan semua tahun
+                    yearly_data = specific_data.groupby('tahun')['berat'].sum()
+                    response = f"Total tangkapan {fish} per tahun:\n"
+                    for year, total in yearly_data.items():
+                        response += f"Tahun {year}: {total:,.2f} Kg\n"
+                    return response
+
+        # Analisis alat tangkap
+        elif 'alat tangkap' in query or 'jenis alat' in query:
+            alat_tangkap = filtered_data.groupby('jenis_api')['berat'].sum().sort_values(ascending=False)
+            response = "Alat tangkap yang digunakan (berdasarkan total tangkapan):\n"
+            for alat, total in alat_tangkap.items():
+                response += f"{alat}: {total:,.2f} Kg\n"
+            return response
+
+        # Analisis tren tahunan
+        elif 'tren' in query or 'perkembangan' in query:
+            yearly_trend = filtered_data.groupby('tahun')['berat'].sum()
+            max_year = yearly_trend.idxmax()
+            min_year = yearly_trend.idxmin()
+            
+            response = "Analisis tren tangkapan:\n"
+            response += f"Tahun dengan tangkapan tertinggi: {max_year} ({yearly_trend[max_year]:,.2f} Kg)\n"
+            response += f"Tahun dengan tangkapan terendah: {min_year} ({yearly_trend[min_year]:,.2f} Kg)\n"
+            
+            # Hitung pertumbuhan year-over-year
+            yoy_growth = yearly_trend.pct_change() * 100
+            response += "\nPertumbuhan year-over-year:\n"
+            for year, growth in yoy_growth.items():
+                if not pd.isna(growth):
+                    response += f"{year}: {growth:,.1f}%\n"
+            return response
+
+        # Analisis nilai produksi
+        elif 'nilai produksi' in query or 'nilai ekonomi' in query:
+            if 'tahun' in query:
+                for year in filtered_data['tahun'].unique():
+                    if str(year) in query:
+                        year_data = filtered_data[filtered_data['tahun'] == year]
+                        total_value = year_data['nilai_produksi'].sum()
+                        return f"Total nilai produksi tahun {year}: Rp {total_value:,.2f}"
+            
+            total_value = filtered_data['nilai_produksi'].sum()
+            avg_value = filtered_data.groupby('tahun')['nilai_produksi'].mean()
+            response = f"Total nilai produksi: Rp {total_value:,.2f}\n"
+            response += "Rata-rata nilai produksi per tahun:\n"
+            for year, value in avg_value.items():
+                response += f"Tahun {year}: Rp {value:,.2f}\n"
+            return response
+
+        # Analisis jenis ikan
+        elif 'jenis ikan' in query or 'ikan apa' in query:
+            top_fish = filtered_data.groupby('nama_ikan_id')['berat'].sum().sort_values(ascending=False).head(5)
+            response = "5 jenis ikan dengan tangkapan terbanyak:\n"
+            for fish, total in top_fish.items():
+                response += f"{fish}: {total:,.2f} Kg\n"
+            return response
+
+        # Default response
+        else:
+            return """Saya dapat membantu Anda menganalisis data perikanan. Anda dapat bertanya tentang:
+                1 . Total tangkapan (per jenis ikan/tahun)
+                2. Alat tangkap yang digunakan
+                3. Tren tangkapan tahunan
+                4. Nilai produksi
+                5. Jenis ikan dominan
+
+                Contoh: 'Berapa total tangkapan cumi tahun 2022?' atau 'Apa saja alat tangkap yang digunakan?'"""
+
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Maaf, terjadi kesalahan dalam menganalisis data: {str(e)}"
+
+# Ganti fungsi get_openai_response dengan fungsi ini
+def get_openai_response(query, filtered_data):
+    return analyze_fishing_data(query, filtered_data)
 
 # st.write('Kolom yang ada:', data.columns)
 
@@ -176,7 +255,7 @@ if menu == 'Dashboard':
 
     # Chatbot
     st.sidebar.markdown('---')
-    st.sidebar.subheader('Chat with Sistok Assistant')
+    st.sidebar.subheader('Ask AI')
 
     # Chat input
     user_input = st.sidebar.text_input('Ask about the Data:', key='chat_input')
@@ -238,7 +317,7 @@ if menu == 'Dashboard':
     filtered_data = filtered_data.rename(columns={k: v for k, v in columns_to_rename.items() if k in filtered_data.columns})
 
     # Ringkasan data
-    with st.expander('VIEW DATASET'):
+    with st.expander('PREVIEW DATASET'):
         showData= st.multiselect('Filter: ', filtered_data.columns, default=filtered_data.columns)
         st.dataframe(filtered_data[showData], use_container_width=True)
      
@@ -552,24 +631,63 @@ elif menu == 'Analysis':
                 # Menambah kolom CPUE
                 alat_tangkap_group['CPUE'] = alat_tangkap_group['catch (ton)'] / alat_tangkap_group['effort (hari)']
 
+                # Hitung persentase kontribusi setiap alat tangkap
+                total_catch = alat_tangkap_group['catch (ton)'].sum()
+                alat_tangkap_group['percentage'] = (alat_tangkap_group['catch (ton)'] / total_catch) *100
 
-                # Urutkan data berdasarkan berat
-                alat_tangkap_group = alat_tangkap_group.sort_values(by='catch (ton)', ascending=False)
+                # Urutkan data berdasarkan persentase tangkapan
+                alat_tangkap_group = alat_tangkap_group.sort_values(by='percentage', ascending=False)
 
-                # Pilih 2 alat tangkap dominan
-                alat_tangkap_dominan = alat_tangkap_group.head(2)
 
-                # Cari CPUE tertinggi
-                cpue_max = alat_tangkap_dominan['CPUE'].max()
+                # Threshold untuk alat tangkap dominan (80%)
+                DOMINANCE_THRESHOLD = 50
 
-                # Kolom FPI
-                alat_tangkap_dominan['FPI'] = alat_tangkap_dominan['CPUE'] / cpue_max
+                # Threshold untuk kontribusi signifikan alat tangkap lain (20%)
+                SIGNIFICANT_THRESHOLD = 20
 
-                alat_tangkap_dominan.loc[alat_tangkap_dominan['CPUE'] == cpue_max, 'FPI'] = 1
+                # Cek apakah ada alat tangkap yang dominan (>=80%)
+                dominant_gear = alat_tangkap_group.iloc[0]
+                is_dominant = dominant_gear['percentage'] >= DOMINANCE_THRESHOLD
+
+                if is_dominant:
+                    # Jika ada alat tangkap dominan (>=80%)
+                    st.write(f"Alat tangkap dominan adalah {dominant_gear['Alat Tangkap']}" f" dengan persentase tangkapan {dominant_gear['percentage']:.2f}% dari total tangkapan")
+
+                    # Gunakan langsung sebagai alat tangkap standar
+                    alat_tangkap_dominan = pd.DataFrame([dominant_gear])
+                    alat_tangkap_dominan['FPI'] = 1.0
+
+                else:
+                    # Jika tidak ada alat tangkap dominan, gunakan threshold signifikansi
+                    significant_gear = alat_tangkap_group[alat_tangkap_group['percentage'] >= SIGNIFICANT_THRESHOLD]
+
+                    st.write(f"Tidak ada alat tangkap dominan (>=50%)." f"Melakukan standarisasi untuk {len(significant_gear)} alat tangkap yang berkontribusi >=20%.")
+
+                    # Lakukan standarisasi untuk alat tangkap yang signifikan
+                    alat_tangkap_dominan = significant_gear.copy()
+                    cpue_max = alat_tangkap_dominan['CPUE'].max()
+                    alat_tangkap_dominan['FPI'] = alat_tangkap_dominan['CPUE'] / cpue_max
+                    alat_tangkap_dominan.loc[alat_tangkap_dominan['CPUE'] == cpue_max, 'FPI'] = 1
 
                 # Tampilkan data dalam tabel
                 st.write('Data CPUE per Alat Tangkap:')
-                st.table(alat_tangkap_dominan)
+                display_cols = ['Alat Tangkap', 'catch (ton)', 'effort (hari)', 'CPUE', 'percentage', 'FPI']
+                st.table(alat_tangkap_dominan[display_cols])
+
+                # # Pilih 2 alat tangkap dominan
+                # alat_tangkap_dominan = alat_tangkap_group.head(2)
+
+                # # Cari CPUE tertinggi
+                # cpue_max = alat_tangkap_dominan['CPUE'].max()
+
+                # # Kolom FPI
+                # alat_tangkap_dominan['FPI'] = alat_tangkap_dominan['CPUE'] / cpue_max
+
+                # alat_tangkap_dominan.loc[alat_tangkap_dominan['CPUE'] == cpue_max, 'FPI'] = 1
+
+                # # Tampilkan data dalam tabel
+                # st.write('Data CPUE per Alat Tangkap:')
+                # st.table(alat_tangkap_dominan)
 
                 # Buat grafik batang
                 fig_cpue = px.bar(
@@ -586,6 +704,392 @@ elif menu == 'Analysis':
                 fig_cpue.update_layout(showlegend=False)
 
                 st.plotly_chart(fig_cpue, use_container_width=True)
+
+                if is_dominant:
+                    # Jika ada alat tangkap dominan, gunakan effort dari alat tangkap tersebut
+                    yearly_effort = user_data[user_data['Alat Tangkap'] == dominant_gear['Alat Tangkap']].groupby('tahun')['effort (hari)'].sum().reset_index()
+                else:
+                    # Jika tidak ada yg dominan, standarisasi effort dengan FPI
+                    standardized_efforts = []
+                    for gear in alat_tangkap_dominan['Alat Tangkap']:
+                        gear_data = user_data[user_data['Alat Tangkap'] == gear]
+                        gear_fpi = alat_tangkap_dominan.loc[alat_tangkap_dominan['Alat Tangkap'] == gear, 'FPI'].iloc[0]
+
+                        # Hitung effort terstandarisasi untuk setiap alat tangkap
+                        gear_effort = gear_data.groupby('tahun')['effort (hari)'].sum() * gear_fpi
+                        standardized_efforts.append(pd.DataFrame({
+                            'tahun' : gear_effort.index,
+                            'effort_std' : gear_effort.values
+                        }))
+
+                    # Gabungkan semua effort yang sudah distandarisasi
+                    combined_efforts = pd.concat(standardized_efforts)
+                    yearly_effort = combined_efforts.groupby('tahun')['effort_std'].sum().reset_index()
+                    yearly_effort.columns = ['tahun', 'effort (hari)']
+
+                # Hitung total cactch per tahun
+                yearly_catch = user_data.groupby('tahun')['catch (ton)'].sum().reset_index()
+
+                # Gabungkan data catch dan effort
+                yearly_data = pd.merge(yearly_catch, yearly_effort, on='tahun')
+                yearly_data['CPUE'] = yearly_data['catch (ton)'] /yearly_data['effort (hari)']
+
+                # Tampilkan data tahunan
+                st.write('Data Tahunan:')
+                st.table(yearly_data)
+
+                # Function untuk menghitung R-squared
+                def calculate_r2(y_true, y_pred):
+                    ss_res = np.sum((y_true - y_pred) ** 2)
+                    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+                    r2 = 1 - (ss_res / ss_tot)
+                    return r2
+
+                # PERHITUNGAN MODEL SCHAEFER
+                def calculate_schaefer(data):
+                    X = data['effort (hari)'].values.reshape(-1, 1)
+                    Y = data['CPUE']
+
+
+                    # Regresi Linear
+                    model = LinearRegression()
+                    model.fit(X, Y)
+
+                    # Parameter model Schaefer
+                    a = model.intercept_  #intercept
+                    b = model.coef_[0] #slope
+
+                    # Prediksi CPUE untuk R^2
+                    Y_pred = model.predict(X)
+                    r2 = calculate_r2(Y, Y_pred)
+
+
+                    # Hitung MSY dan Eopt
+                    Eopt = -a / (2*b)
+                    CMSY = -(a ** 2) / (4 * b)
+
+                    return {
+                        'name' : 'Schaefer',
+                        'a': a,
+                        'b': b,
+                        'Eopt': Eopt,
+                        'CMSY': CMSY,
+                        'R2': r2
+
+                    }
+
+                # PERHITUNGAN MODEL FOX
+                def calculate_fox(data):
+                    X = data['effort (hari)'].values.reshape(-1, 1)
+                    Y = np.log(data['CPUE']) #Menggunakan Ln(CPUE)
+
+                    # Regresi linear
+                    model = LinearRegression()
+                    model.fit(X ,Y)
+
+                    # Parameter model
+                    # c = np.exp(model.intercept_) 
+                    c = model.intercept_
+                    d = model.coef_[0]
+
+                    # Prdiksi Ln(CPUE ) untuk R2
+                    Y_pred = model.predict(X)
+                    r2 = calculate_r2(Y, Y_pred)
+
+                    # Hitung MSY dan Eopt untuk Fox
+                    Eopt = -1 / d
+                    CMSY = -(1/d) * np.exp(c-1) 
+
+                    # Buat array untuk menyimpan nilai effort dan catch
+                    n_points = 20
+                    effort_points = np.zeros(n_points)
+                    catch_points = np.zeros(n_points)
+
+                    # Isi nilai data ke-1 dengan nilai 0
+                    effort_points[0] = 0 
+                    catch_points[0] = 0
+
+                    # Data ke 2 sampapi ke-2 menggunakan rumus: data sebelumnya + Eopt*0.1
+                    for i in range(1, n_points):
+                        effort_points[i] = effort_points[i-1] + (Eopt * 0.1)
+                        # Hitung catch menggunakan rumus Ct = Et * Exp(c+ dEt)
+                        catch_points[i] = effort_points[i] * np.exp(c + d * effort_points[i])
+
+                    return {
+                        'name': 'Fox',
+                        'c': c, 
+                        'd': d,
+                        'Eopt': Eopt,
+                        'CMSY': CMSY,
+                        'R2': r2,
+                        'effort_range' : effort_points,
+                        'catch_pred': catch_points
+                    }
+
+                # Hitung kedua model
+                schaefer_results = calculate_schaefer(yearly_data)
+                fox_results = calculate_fox(yearly_data)
+
+                # Tampilkan hasil perhitungan kedua model
+                st.write('### Hasil Perhitungan Model')
+                comparison_df = pd.DataFrame({
+                    'Parameter' : ['a', 'b', 'R2', 'Eopt', 'MSY'],
+                    'Model Schaefer': [
+                        f"{schaefer_results['a']:.6f}",
+                        f"{schaefer_results['b']:.6f}",	
+                        f"{schaefer_results['R2']:.4f}",
+                        f"{schaefer_results['Eopt']:.2f} hari",
+                        f"{schaefer_results['CMSY']:.2f} ton"
+                    ],
+                    'Model Fox': [
+                        f"{fox_results['c']:.4f}",
+                        f"{fox_results['d']:.4f}",
+                        f"{fox_results['R2']:.4f}",
+                        f"{fox_results['Eopt']:.2f} hari",
+                        f"{fox_results['CMSY']:.2f} ton"
+                    ]
+                })
+                st.table(comparison_df)
+
+                # Pilih model untuk visualisasi
+                selected_model = st.radio(
+                    "Pilih model yang akan ditampilkan (berdasarkan nilai R^2):",
+                    [f"Model Schaefer(R² = {schaefer_results['R2']:.4f})",
+                    f"Model Fox (R² = {fox_results['R2']:.4f})"
+                    ]
+                )
+
+                # Visualisasi model yang dipilih 
+                if 'Schaefer' in selected_model:
+                    model_results = schaefer_results
+
+                    # Buat 20 titik data dari 0 sampai 2 Eopt
+                    n_points = 20
+                    effort_range = np.linspace(0, 2 * model_results['Eopt'], n_points)
+                    # Hitung catch menggunakan schaefer
+                    catch_pred = effort_range * (model_results['a'] + model_results['b'] * effort_range)
+
+                else:
+                    model_results = fox_results
+                    # Buat 20 titik data sesuai panduan buku
+                    n_points = 100
+                    
+                    # Inisialisasi array untuk effort dan catch
+                    effort_range = np.zeros(n_points)
+                    catch_pred = np.zeros(n_points)
+                    
+                    # Data pertama = 0
+                    effort_range[0] = 0
+                    catch_pred[0] = 0
+                    
+                    # Hitung effort dan catch untuk titik 2-20
+                    for i in range(1, n_points):
+                        # Effort = data sebelumnya + (Eopt * 0.1)
+                        effort_range[i] = effort_range[i-1] + (model_results['Eopt'] * 0.1)
+                        # Catch = Et * exp(a + b*Et)
+                        catch_pred[i] = effort_range[i] * np.exp(model_results['c'] + model_results['d'] * effort_range[i])
+
+                # Setelah kedua model selesai, buat dataframe
+                model_df = pd.DataFrame({
+                    'Effort': effort_range,
+                    'Catch': catch_pred
+                })
+
+                # Pastikan nilai catch di titik awal = 0
+                model_df.loc[0, 'Catch'] = 0
+
+                # Buat dataframe untuk data aktual
+                actual_df = yearly_data[['effort (hari)', 'catch (ton)']]
+
+                # Visualisasi 
+                fig_surplus = go.Figure()
+
+                # Tambahkan kurva model 
+                fig_surplus.add_trace(
+                    go.Scatter(
+                        x=model_df['Effort'],
+                        y=model_df['Catch'],
+                        mode='lines',
+                        name=f"Model {model_results['name']}",
+                        line=dict(color='blue', width=2)
+                    )
+                )
+
+                # Tambahkan data aktual
+                fig_surplus.add_trace(
+                    go.Scatter(
+                        x=actual_df['effort (hari)'],
+                        y=actual_df['catch (ton)'],
+                        mode='markers',
+                        name='Data Aktual',
+                        marker=dict(color='red', size=8)
+                    )
+                )
+
+                # Tambahkan titik MSY
+                fig_surplus.add_trace(
+                    go.Scatter(
+                        x=[model_results['Eopt']],
+                        y=[model_results['CMSY']],
+                        mode='markers',
+                        name='MSY',
+                        marker=dict(color='green', size=12, symbol='star')
+                    )
+                )
+
+                # Update layout
+                fig_surplus.update_layout(
+                    title=f"Hubungan Hasil Tangkapan dan Upaya Penangkapan ({model_results['name']})",
+                    xaxis_title='Upaya Penangkapan (hari)',
+                    yaxis_title='Hasil Tangkapan (ton)',
+                    template='plotly_white',
+                    showlegend=True,
+                    legend=dict(
+                        yanchor="top",
+                        y=-0.2,
+                        xanchor="center",
+                        x=0.5,
+                        orientation="h"
+                    ),
+                    # Pastikan sumbu x dan y dimulai dari 0
+                    xaxis=dict(range=[0, max(effort_range)], zeroline=True, linewidth=2),
+                    yaxis=dict(range=[0, max(catch_pred) * 1.2], zeroline=True, linewidth=2)
+                )
+
+                st.plotly_chart(fig_surplus, use_container_width=True)
+
+
+                # Grafik Hubungan CPUE dengan Effort
+                st.write('### Grafik Hubungan CPUE dengan Effort')
+
+                # Buat figure baru untuk CPUE-Effort
+                if 'Schaefer' in selected_model:
+                    # Hitung CPUE prediksi untuk model Schaefer
+                    cpue_pred = model_results['a'] + model_results['b'] * effort_range
+                    
+                    fig_cpue = go.Figure()
+                    
+                    # Tambahkan garis regresi
+                    fig_cpue.add_trace(
+                        go.Scatter(
+                            x=effort_range,
+                            y=cpue_pred,
+                            mode='lines',
+                            name='Model Schaefer',
+                            line=dict(color='blue', width=2)
+                        )
+                    )
+                    
+                    # Tambahkan data aktual
+                    fig_cpue.add_trace(
+                        go.Scatter(
+                            x=yearly_data['effort (hari)'],
+                            y=yearly_data['CPUE'],
+                            mode='markers',
+                            name='Data Aktual',
+                            marker=dict(color='red', size=8)
+                        )
+                    )
+                    
+                    # Update layout
+                    fig_cpue.update_layout(
+                        title='Hubungan CPUE dengan Effort (Model Schaefer)',
+                        xaxis_title='Upaya Penangkapan (hari)',
+                        yaxis_title='CPUE (ton/hari)',
+                        template='plotly_white',
+                        showlegend=True,
+                        legend=dict(
+                            yanchor="top",
+                            y=-0.2,
+                            xanchor="center",
+                            x=0.5,
+                            orientation="h"
+                        ),
+                        xaxis=dict(zeroline=True, linewidth=2),
+                        yaxis=dict(zeroline=True, linewidth=2)
+                    )
+                    
+                else:
+                    # Hitung ln(CPUE) prediksi untuk model Fox
+                    ln_cpue_pred = model_results['c'] + model_results['d'] * effort_range
+                    
+                    fig_cpue = go.Figure()
+                    
+                    # Tambahkan garis regresi
+                    fig_cpue.add_trace(
+                        go.Scatter(
+                            x=effort_range,
+                            y=ln_cpue_pred,
+                            mode='lines',
+                            name='Model Fox',
+                            line=dict(color='blue', width=2)
+                        )
+                    )
+                    
+                    # Tambahkan data aktual
+                    fig_cpue.add_trace(
+                        go.Scatter(
+                            x=yearly_data['effort (hari)'],
+                            y=np.log(yearly_data['CPUE']),  # menggunakan ln(CPUE) untuk data aktual
+                            mode='markers',
+                            name='Data Aktual',
+                            marker=dict(color='red', size=8)
+                        )
+                    )
+                    
+                    # Update layout
+                    fig_cpue.update_layout(
+                        title='Hubungan ln(CPUE) dengan Effort (Model Fox)',
+                        xaxis_title='Upaya Penangkapan (hari)',
+                        yaxis_title='ln(CPUE)',
+                        template='plotly_white',
+                        showlegend=True,
+                        legend=dict(
+                            yanchor="top",
+                            y=-0.2,
+                            xanchor="center",
+                            x=0.5,
+                            orientation="h"
+                        ),
+                        xaxis=dict(zeroline=True, linewidth=2),
+                        yaxis=dict(zeroline=True, linewidth=2)
+                    )
+
+                # Tampilkan grafik
+                st.plotly_chart(fig_cpue)
+
+                # Tambahkan tabel data yang digunakan dalam grafik
+                st.write('### Data yang Digunakan dalam Grafik')
+                if 'Schaefer' in selected_model:
+                    plot_data = pd.DataFrame({
+                        'Effort': yearly_data['effort (hari)'],
+                        'CPUE': yearly_data['CPUE'],
+                        'CPUE_predicted': model_results['a'] + model_results['b'] * yearly_data['effort (hari)']
+                    })
+                    st.write('Model Schaefer:')
+                else:
+                    plot_data = pd.DataFrame({
+                        'Effort': yearly_data['effort (hari)'],
+                        'ln(CPUE)': np.log(yearly_data['CPUE']),
+                        'ln(CPUE)_predicted': model_results['c'] + model_results['d'] * yearly_data['effort (hari)']
+                    })
+                    st.write('Model Fox:')
+
+                st.table(plot_data.round(4))
+
+
+                # Tampilkan beberapa titik penting dari model
+                st.write(f'### Titik-titik penting Model {model_results['name']}')
+                important_points = pd.DataFrame({
+                    'Effort': [0, model_results['Eopt']/2, model_results['Eopt'], model_results['Eopt']*1.5, model_results['Eopt']*2],
+                    'Catch': [0, model_results['CMSY']*0.75, model_results['CMSY'], 
+                                model_results['CMSY']*0.75, 0]
+                }).round(2)
+                important_points['% dari MSY'] = (important_points['Catch'] / model_results['CMSY'] * 100).round(2)
+                st.table(important_points)
+
+
+
            	
         
             
@@ -629,11 +1133,97 @@ elif menu == 'Analysis':
 
 
 elif menu == 'About':
-    st.title('About this App')
-    st.write('Sistok adalah Aplikasi berbasis web untuk analisis data stok ikan')
+    # st.title('About this App')
+    
+    # Main Description
+    st.markdown ("""
+    ## What is SISTOK ?
+    SISTOK (Sistem Informasi Stok Perikanan) is a comprehensive web-based application designed to help fisheries researchers, managers, and stakeholders analysize and understand fish stock data effectively. This tool provides various analytical capabilities to supports sustainable fisheries management.     
+                 """)
+    
+    # Key Features
+    st.markdown("## ✨ Key Features")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        ### 📊 Data Management
+        - CSV file upload support
+        - Real-time data processing
+        - Interactive data filtering
+        
+        ### 📈 Visualization
+        - Dynamic charts and graphs
+        - Catch statistics visualization
+        - Temporal trend analysis
+        """)
+        
+    with col2:
+        st.markdown("""
+        ### 🎯 Advanced Analytics
+        - Surplus Production Models (Schaefer & Fox)
+        - CPUE Analysis
+        - Fishing effort standardization
+        
+        ### 📆 Time Series Analysis
+        - Multiple time frame options
+        - Trend identification
+        - Seasonal pattern analysis
+        """)
+
+    # How to use
+    st.markdown("## 🔍 How to Use SISTOK")
+
+    with st.expander("STEP-BY-STEP GUIDE"):
+        st.markdown("""
+        1. **Data Upload**
+            - Navigate to the Analysis section
+            - Upload your CSV file containing fishing data
+            - Ensure your data includes required columns (date, catch, effort)
+                    
+        2. **Data Exploration**
+            - Use the Dashboard to view data
+            - Apply filters to focus on specific time or Ports or Fish
+            - Examine catch trends and patterns
+                
+        3. **Analysis**
+            - Calculate CPUE for different fishing gears
+            - Apply surplus production models
+            - Estimate MSY and optimal fishing effort
+                    
+        4. **Results Interpretation**
+            - Review visualizations and statistics
+            - Download or export yor analytics results
+            - Make informed management decisions
+                    
+    """)
+        # Technical Requirements
+        st.markdown("## 💻 Technical Requirements")
+        st.info("""
+        Your data should be in CSV fortmat with the following columns:
+        - Date columns (tanggal_berangkat, tanggal_kedatangan
+        - Catch data (berat)
+        - Effort data (Jumlah hari)
+        - Fishing gear (jenis_api)
+        - Additional metadata as needed
+    """)
+        
+        # Contact Information
+        st.markdown("## 📬 Contact & Support")
+        st.markdown("""
+        - 📧 Email: tandrysimamora@gmail.com
+        - 📱 Phone: +62 822 6160-6428
+    """)
+        # Version
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### Version Info")
+        st.sidebar.info("SISTOK v1.0.0")
+        
 
 else:
     st.error('Data tidak tersedia. Silahkan periksa kembali file Anda.')
 
 
 
+
+    
